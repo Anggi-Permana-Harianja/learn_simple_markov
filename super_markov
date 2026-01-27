@@ -1,0 +1,242 @@
+#!/usr/bin/env python3
+"""
+Simple Order-3 Markov Model
+States: Last 3 stock HIGH price moves only (UUU, UUD, UDU, UDD, DUU, DUD, DDU, DDD)
+
+Price move definition:
+- Uses HIGH price of each candle
+- U: High[t] > High[t-1]
+- D: High[t] < High[t-1]
+(Equal prices ignored)
+
+Data: Uses ALL available historical data (max available from yfinance)
+Data cutoff: Up to yesterday in US Eastern Time
+"""
+
+import argparse
+import sys
+from collections import defaultdict
+from datetime import datetime, timedelta, timezone
+from typing import Dict, List, Tuple, Optional
+
+import numpy as np
+import pandas as pd
+
+ALL_STATES = ["UUU", "UUD", "UDU", "UDD", "DUU", "DUD", "DDU", "DDD"]
+
+def download_prices_yfinance(ticker: str, period: str = "max") -> pd.DataFrame:
+    import yfinance as yf
+
+    # Download ALL available data (period="max" gets maximum history)
+    df = yf.download(
+        ticker,
+        period=period,
+        interval="1d",
+        auto_adjust=False,
+        progress=False,
+        threads=False,
+    )
+
+    if df is None or df.empty:
+        raise RuntimeError("yfinance returned no data.")
+
+    # Handle MultiIndex columns
+    if isinstance(df.columns, pd.MultiIndex):
+        df.columns = df.columns.get_level_values(0)
+
+    if "High" not in df.columns:
+        raise RuntimeError("No High column found.")
+
+    # Filter to yesterday in US Eastern Time
+    try:
+        from zoneinfo import ZoneInfo
+        us_eastern = ZoneInfo('America/New_York')
+        now_eastern = datetime.now(us_eastern)
+    except:
+        import pytz
+        us_eastern = pytz.timezone('America/New_York')
+        now_eastern = datetime.now(us_eastern)
+    
+    yesterday_eastern = (now_eastern - timedelta(days=1)).date()
+    df = df[df.index.date <= yesterday_eastern]
+    
+    return df
+
+
+def build_pairs(highs: pd.Series) -> List[Tuple[str, str]]:
+    """Build (last_3_moves, next_move) pairs"""
+    diff = highs.diff()
+    moves = []
+    
+    for i in range(len(diff)):
+        d = diff.iat[i] if i < len(diff) else None
+        if pd.isna(d):
+            continue
+        if d > 0:
+            moves.append("U")
+        elif d < 0:
+            moves.append("D")
+        # Skip ties
+    
+    pairs = []
+    for t in range(3, len(moves)):
+        state = "".join(moves[t-3:t])
+        next_move = moves[t]
+        pairs.append((state, next_move))
+    
+    return pairs
+
+
+def calc_probs(pairs: List[Tuple[str, str]]) -> pd.DataFrame:
+    """Calculate P(U) and P(D) for each state"""
+    counts = defaultdict(lambda: defaultdict(int))
+    totals = defaultdict(int)
+    
+    for state, next_move in pairs:
+        counts[state][next_move] += 1
+        totals[state] += 1
+    
+    rows = []
+    for state in ALL_STATES:
+        n = totals.get(state, 0)
+        pu = counts[state]["U"] / n if n else 0.0
+        pdown = counts[state]["D"] / n if n else 0.0  # Changed from 'pd' to 'pdown'
+        rows.append({"state": state, "n": n, "P(U)": pu, "P(D)": pdown})
+    
+    return pd.DataFrame(rows).set_index("state")
+
+
+def last_state(highs: pd.Series) -> Optional[str]:
+    """Get last 3 moves"""
+    diff = highs.diff()
+    moves = []
+    
+    for i in range(len(diff)):
+        d = diff.iat[i] if i < len(diff) else None
+        if pd.isna(d):
+            continue
+        if d > 0:
+            moves.append("U")
+        elif d < 0:
+            moves.append("D")
+    
+    if len(moves) < 3:
+        return None
+    
+    return "".join(moves[-3:])
+
+
+def main():
+    ap = argparse.ArgumentParser(description="Simple Markov model - uses ALL available data")
+    ap.add_argument("ticker", nargs="?", help="Stock ticker")
+    args = ap.parse_args()
+    
+    ticker = args.ticker or input("Enter stock ticker: ").strip().upper()
+    
+    print(f"\nDownloading ALL available data for {ticker}...")
+    df = download_prices_yfinance(ticker, period="max")
+    
+    # Show data range
+    first_date = df.index[0].date() if hasattr(df.index[0], 'date') else df.index[0]
+    last_date = df.index[-1].date() if hasattr(df.index[-1], 'date') else df.index[-1]
+    years = (last_date - first_date).days / 365.25
+    
+    print(f"Data range: {first_date} to {last_date} ({years:.1f} years, {len(df)} trading days)")
+    
+    # Debug: Show last 4 candles
+    print("\n" + "="*70)
+    print("DEBUG: Last 4 candles")
+    print("="*70)
+    
+    try:
+        from zoneinfo import ZoneInfo
+        us_eastern = ZoneInfo('America/New_York')
+        now_eastern = datetime.now(us_eastern)
+    except:
+        import pytz
+        us_eastern = pytz.timezone('America/New_York')
+        now_eastern = datetime.now(us_eastern)
+    
+    yesterday_eastern = (now_eastern - timedelta(days=1)).date()
+    local_time = datetime.now()
+    
+    print(f"\nTimezone info:")
+    print(f"  Your local time: {local_time.strftime('%Y-%m-%d %H:%M:%S')}")
+    print(f"  US Eastern time: {now_eastern.strftime('%Y-%m-%d %H:%M:%S %Z')}")
+    print(f"  Data cutoff: {yesterday_eastern} (yesterday US Eastern)")
+    
+    if len(df) >= 4:
+        last_4 = df.tail(4)
+        actual_last = df.index[-1].date() if hasattr(df.index[-1], 'date') else df.index[-1]
+        print(f"  Actual last date in data: {actual_last}")
+        
+        print("\nStock data (last 4 candles):")
+        for idx, row in last_4.iterrows():
+            date_str = idx.strftime('%Y-%m-%d') if hasattr(idx, 'strftime') else str(idx)
+            h = row.get('High', 'N/A')
+            l = row.get('Low', 'N/A')
+            o = row.get('Open', 'N/A')
+            c = row.get('Close', 'N/A')
+            print(f"  {date_str}: H={h}, L={l}, O={o}, C={c}")
+        
+        print("\nHIGH price moves:")
+        highs = last_4['High'].values
+        for i in range(1, len(highs)):
+            move = 'U' if highs[i] > highs[i-1] else ('D' if highs[i] < highs[i-1] else '=')
+            print(f"  {highs[i-1]:.2f} → {highs[i]:.2f} = {move}")
+        
+        if len(highs) >= 3:
+            moves = []
+            for i in range(len(highs)-3, len(highs)):
+                if i > 0 and highs[i] != highs[i-1]:
+                    moves.append('U' if highs[i] > highs[i-1] else 'D')
+            pattern = ''.join(moves) if len(moves) == 3 else "N/A"
+            print(f"\nExpected last state: {pattern}")
+    
+    print("="*70 + "\n")
+    
+    # Build model
+    highs = df['High'].astype(float).dropna()
+    pairs = build_pairs(highs)
+    
+    if len(pairs) < 10:
+        print(f"[warn] Only {len(pairs)} transitions. Need more data!")
+        return 1
+    
+    probs = calc_probs(pairs).sort_values(by="n", ascending=False)
+    curr_state = last_state(highs)
+    
+    # Output
+    first_date = df.index[0].date() if hasattr(df.index[0], 'date') else df.index[0]
+    last_date = df.index[-1].date() if hasattr(df.index[-1], 'date') else df.index[-1]
+    years = (last_date - first_date).days / 365.25
+    
+    print(f"[info] Ticker={ticker} | DataRange={first_date} to {last_date} ({years:.1f}y) | Transitions={len(pairs)} | LastState={curr_state}\n")
+    print("=== P(next move | last 3 moves) ===")
+    print("Note: Based on HIGH prices only\n")
+    
+    display = probs.copy()
+    display["P(U)"] = display["P(U)"].map(lambda x: f"{x:.4f}")
+    display["P(D)"] = display["P(D)"].map(lambda x: f"{x:.4f}")
+    print(display.to_string())
+    
+    if curr_state and curr_state in probs.index:
+        print(f"\n{'='*70}")
+        print(f"CURRENT STATE: {curr_state}")
+        print(f"{'='*70}")
+        row = probs.loc[curr_state]
+        print(f"P(Up next): {row['P(U)']:.2%}")
+        print(f"P(Down next): {row['P(D)']:.2%}")
+        print(f"Sample size: {int(row['n'])} times")
+    
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())
+    """
+    Please dont get deceived...
+    if P(U) is higher probability, it might means the next price is lower, 
+    because we predict the moves, instead of actual
+    so if the expected is P(U) it means it requires next price is lower to align that High[t-1] > High[t], right?
+    """
