@@ -1,18 +1,22 @@
 #!/usr/bin/env python3
 """
-Configurable Order Markov Model
-Can use last 3-10 candles for prediction (1-2 weeks of trading days)
+Candle Direction Markov Model
+Predicts if next candle will be GREEN (bullish) or RED (bearish)
 
-Price move definition:
-- Uses HIGH price of each candle
-- U: High[t] > High[t-1]
-- D: High[t] < High[t-1]
-(Equal prices ignored)
+Move definition (based on candle color):
+- GREEN (U): Close[t] > Open[t]  (bullish candle)
+- RED (D):   Close[t] < Open[t]  (bearish candle)
+(Doji candles where Close = Open are ignored)
 
-Order examples:
-- order=3: Last 3 moves (UUU, UUD, etc.) → 8 states
-- order=7: Last 7 moves (1.5 weeks) → 128 states
-- order=10: Last 10 moves (2 weeks) → 1024 states
+This approach:
+- Learns market sentiment patterns (buyer vs seller dominance)
+- More intuitive - predicts candle color, not price levels
+- Works across platforms - eToro and yfinance show same candle colors
+- Perfect for: "After 3 green candles, will next be green or red?"
+
+Shows BOTH order=3 and order=5 for confirmation:
+- If both agree → STRONG SIGNAL (use 5x leverage)
+- If they disagree → WEAK SIGNAL (don't trade)
 
 Data: Uses ALL available historical data (max available from yfinance)
 Data cutoff: Up to yesterday in US Eastern Time
@@ -66,8 +70,11 @@ def download_prices_yfinance(ticker: str, period: str = "max") -> pd.DataFrame:
     if isinstance(df.columns, pd.MultiIndex):
         df.columns = df.columns.get_level_values(0)
 
-    if "High" not in df.columns:
-        raise RuntimeError("No High column found.")
+    if "Open" not in df.columns:
+        raise RuntimeError("No Open column found.")
+    
+    if "Close" not in df.columns:
+        raise RuntimeError("No Close column found.")
 
     # Filter to yesterday in US Eastern Time
     try:
@@ -85,26 +92,31 @@ def download_prices_yfinance(ticker: str, period: str = "max") -> pd.DataFrame:
     return df
 
 
-def build_pairs(highs: pd.Series, order: int) -> List[Tuple[str, str]]:
-    """Build (last_N_moves, next_move) pairs"""
-    diff = highs.diff()
-    moves = []
+def build_pairs(df: pd.DataFrame, order: int) -> List[Tuple[str, str]]:
+    """Build (last_N_candles, next_candle) pairs based on candle color"""
+    opens = df['Open'].astype(float)
+    closes = df['Close'].astype(float)
     
-    for i in range(len(diff)):
-        d = diff.iat[i] if i < len(diff) else None
-        if pd.isna(d):
+    candles = []
+    
+    for i in range(len(df)):
+        o = opens.iat[i] if i < len(opens) else None
+        c = closes.iat[i] if i < len(closes) else None
+        
+        if pd.isna(o) or pd.isna(c):
             continue
-        if d > 0:
-            moves.append("U")
-        elif d < 0:
-            moves.append("D")
-        # Skip ties
+        
+        if c > o:
+            candles.append("U")  # Green/bullish candle
+        elif c < o:
+            candles.append("D")  # Red/bearish candle
+        # Skip doji (c == o)
     
     pairs = []
-    for t in range(order, len(moves)):
-        state = "".join(moves[t-order:t])
-        next_move = moves[t]
-        pairs.append((state, next_move))
+    for t in range(order, len(candles)):
+        state = "".join(candles[t-order:t])
+        next_candle = candles[t]
+        pairs.append((state, next_candle))
     
     return pairs
 
@@ -128,34 +140,45 @@ def calc_probs(pairs: List[Tuple[str, str]], all_states: List[str]) -> pd.DataFr
     return pd.DataFrame(rows).set_index("state")
 
 
-def last_state(highs: pd.Series, order: int) -> Optional[str]:
-    """Get last N moves"""
-    diff = highs.diff()
-    moves = []
+def last_state(df: pd.DataFrame, order: int) -> Optional[str]:
+    """Get last N candle colors"""
+    opens = df['Open'].astype(float)
+    closes = df['Close'].astype(float)
     
-    for i in range(len(diff)):
-        d = diff.iat[i] if i < len(diff) else None
-        if pd.isna(d):
+    candles = []
+    
+    for i in range(len(df)):
+        o = opens.iat[i] if i < len(opens) else None
+        c = closes.iat[i] if i < len(closes) else None
+        
+        if pd.isna(o) or pd.isna(c):
             continue
-        if d > 0:
-            moves.append("U")
-        elif d < 0:
-            moves.append("D")
+        
+        if c > o:
+            candles.append("U")  # Green
+        elif c < o:
+            candles.append("D")  # Red
+        # Skip doji
     
-    if len(moves) < order:
+    if len(candles) < order:
         return None
     
-    return "".join(moves[-order:])
+    return "".join(candles[-order:])
 
 
 def main():
     ap = argparse.ArgumentParser(
-        description="Markov model showing BOTH 3-candle and 5-candle predictions for confirmation",
+        description="Candle Direction Markov: Predicts GREEN (bullish) or RED (bearish) candles",
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog="""
-Why show both?
-  If both order=3 and order=5 agree → STRONG SIGNAL (high confidence)
-  If they disagree → WEAK SIGNAL (market uncertain)
+How it works:
+  Learns patterns: "After GREEN-RED-GREEN, what color is next candle?"
+  Uses market data (yfinance) to train on real candle colors
+  
+Why show both order=3 and order=5?
+  If both agree on GREEN → STRONG BUY signal (use 5x leverage)
+  If both agree on RED → STRONG SELL signal (use 5x leverage)  
+  If they disagree → DON'T TRADE (market uncertain)
         """
     )
     ap.add_argument("ticker", nargs="?", help="Stock ticker")
@@ -208,33 +231,41 @@ Why show both?
             l = row.get('Low', 'N/A')
             o = row.get('Open', 'N/A')
             c = row.get('Close', 'N/A')
-            print(f"  {date_str}: H={h:.2f}, L={l:.2f}, O={o:.2f}, C={c:.2f}")
+            print(f"  {date_str}: O={o:.2f}, H={h:.2f}, L={l:.2f}, C={c:.2f}")
         
-        print("\nHIGH price moves:")
-        highs = last_n['High'].values
-        for i in range(1, len(highs)):
-            move = 'U' if highs[i] > highs[i-1] else ('D' if highs[i] < highs[i-1] else '=')
-            pct = ((highs[i] / highs[i-1]) - 1) * 100
-            print(f"  {highs[i-1]:.2f} → {highs[i]:.2f} ({pct:+.2f}%) = {move}")
+        print("\nCandle colors (GREEN=bullish, RED=bearish):")
+        for idx, row in last_n.iterrows():
+            date_str = idx.strftime('%Y-%m-%d') if hasattr(idx, 'strftime') else str(idx)
+            o = row.get('Open', 0)
+            c = row.get('Close', 0)
+            
+            if c > o:
+                color = "GREEN (U)"
+                pct = ((c / o) - 1) * 100
+            elif c < o:
+                color = "RED (D)"
+                pct = ((c / o) - 1) * 100
+            else:
+                color = "DOJI (=)"
+                pct = 0
+            
+            print(f"  {date_str}: O={o:.2f} → C={c:.2f} ({pct:+.2f}%) = {color}")
     
     print("="*70 + "\n")
-    
-    # Get HIGH prices
-    highs = df['High'].astype(float).dropna()
     
     # Calculate for BOTH order=3 and order=5
     results = {}
     
     for order in [3, 5]:
         all_states = generate_all_states(order)
-        pairs = build_pairs(highs, order)
+        pairs = build_pairs(df, order)
         
         if len(pairs) < 10:
             print(f"[warn] Order={order}: Only {len(pairs)} transitions. Skipping.")
             continue
         
         probs = calc_probs(pairs, all_states)
-        curr_state = last_state(highs, order)
+        curr_state = last_state(df, order)
         
         results[order] = {
             'probs': probs,
@@ -267,8 +298,9 @@ Why show both?
         probs_with_data = probs[probs['n'] > 0].sort_values(by="n", ascending=False)
         
         display = probs_with_data.copy()
-        display["P(U)"] = display["P(U)"].map(lambda x: f"{x:.4f}")
-        display["P(D)"] = display["P(D)"].map(lambda x: f"{x:.4f}")
+        display = display.rename(columns={'P(U)': 'P(GREEN)', 'P(D)': 'P(RED)'})
+        display["P(GREEN)"] = display["P(GREEN)"].map(lambda x: f"{x:.4f}")
+        display["P(RED)"] = display["P(RED)"].map(lambda x: f"{x:.4f}")
         
         print(display.to_string())
         print()
@@ -279,16 +311,16 @@ Why show both?
             if row['n'] > 0:
                 print(f"CURRENT STATE DETAIL:")
                 print(f"  State: {curr_state}")
-                print(f"  P(Up next):   {row['P(U)']:.2%}")
-                print(f"  P(Down next): {row['P(D)']:.2%}")
-                print(f"  Sample size:  {int(row['n'])} times")
+                print(f"  P(GREEN next): {row['P(U)']:.2%}")
+                print(f"  P(RED next):   {row['P(D)']:.2%}")
+                print(f"  Sample size:   {int(row['n'])} times")
                 
                 # Determine prediction
                 if row['P(U)'] >= 0.55:
-                    prediction = "UP"
+                    prediction = "GREEN"
                     confidence = row['P(U)']
                 elif row['P(D)'] >= 0.55:
-                    prediction = "DOWN"
+                    prediction = "RED"
                     confidence = row['P(D)']
                 else:
                     prediction = "NEUTRAL"
@@ -300,7 +332,7 @@ Why show both?
                     'sample': int(row['n'])
                 }
                 
-                print(f"  → Prediction: {prediction} ({confidence:.1%})")
+                print(f"  → Prediction: {prediction} candle ({confidence:.1%})")
             else:
                 print(f"\nCURRENT STATE: {curr_state}")
                 print("No historical data for this state")
@@ -327,9 +359,15 @@ Why show both?
         # Check agreement
         if pred3['direction'] == pred5['direction'] and pred3['direction'] != 'NEUTRAL':
             avg_confidence = (pred3['confidence'] + pred5['confidence']) / 2
-            print(f"✓✓✓ STRONG {pred3['direction']} SIGNAL ✓✓✓")
+            print(f"✓✓✓ STRONG {pred3['direction']} CANDLE SIGNAL ✓✓✓")
             print(f"Both models AGREE → High confidence!")
             print(f"Average confidence: {avg_confidence:.1%}")
+            
+            if pred3['direction'] == 'GREEN':
+                print(f"\n→ Trade: LONG/BUY with 5x leverage")
+            else:
+                print(f"\n→ Trade: SHORT/SELL with 5x leverage")
+                
         elif pred3['direction'] == 'NEUTRAL' or pred5['direction'] == 'NEUTRAL':
             print(f"⚠ WEAK SIGNAL - At least one model shows NEUTRAL")
             print(f"Recommendation: Avoid trading or use small position")
