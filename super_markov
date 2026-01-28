@@ -1,13 +1,18 @@
 #!/usr/bin/env python3
 """
-Simple Order-3 Markov Model
-States: Last 3 stock HIGH price moves only (UUU, UUD, UDU, UDD, DUU, DUD, DDU, DDD)
+Configurable Order Markov Model
+Can use last 3-10 candles for prediction (1-2 weeks of trading days)
 
 Price move definition:
 - Uses HIGH price of each candle
 - U: High[t] > High[t-1]
 - D: High[t] < High[t-1]
 (Equal prices ignored)
+
+Order examples:
+- order=3: Last 3 moves (UUU, UUD, etc.) → 8 states
+- order=7: Last 7 moves (1.5 weeks) → 128 states
+- order=10: Last 10 moves (2 weeks) → 1024 states
 
 Data: Uses ALL available historical data (max available from yfinance)
 Data cutoff: Up to yesterday in US Eastern Time
@@ -16,18 +21,35 @@ Data cutoff: Up to yesterday in US Eastern Time
 import argparse
 import sys
 from collections import defaultdict
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, timedelta
 from typing import Dict, List, Tuple, Optional
 
 import numpy as np
 import pandas as pd
 
-ALL_STATES = ["UUU", "UUD", "UDU", "UDD", "DUU", "DUD", "DDU", "DDD"]
+
+def generate_all_states(order: int) -> List[str]:
+    """Generate all possible states for given order"""
+    if order == 1:
+        return ["U", "D"]
+    
+    states = []
+    # Generate all combinations of U/D for 'order' positions
+    for i in range(2 ** order):
+        state = ""
+        num = i
+        for _ in range(order):
+            state = ("U" if num % 2 == 0 else "D") + state
+            num //= 2
+        states.append(state)
+    
+    return states
+
 
 def download_prices_yfinance(ticker: str, period: str = "max") -> pd.DataFrame:
     import yfinance as yf
 
-    # Download ALL available data (period="max" gets maximum history)
+    # Download ALL available data
     df = yf.download(
         ticker,
         period=period,
@@ -63,8 +85,8 @@ def download_prices_yfinance(ticker: str, period: str = "max") -> pd.DataFrame:
     return df
 
 
-def build_pairs(highs: pd.Series) -> List[Tuple[str, str]]:
-    """Build (last_3_moves, next_move) pairs"""
+def build_pairs(highs: pd.Series, order: int) -> List[Tuple[str, str]]:
+    """Build (last_N_moves, next_move) pairs"""
     diff = highs.diff()
     moves = []
     
@@ -79,15 +101,15 @@ def build_pairs(highs: pd.Series) -> List[Tuple[str, str]]:
         # Skip ties
     
     pairs = []
-    for t in range(3, len(moves)):
-        state = "".join(moves[t-3:t])
+    for t in range(order, len(moves)):
+        state = "".join(moves[t-order:t])
         next_move = moves[t]
         pairs.append((state, next_move))
     
     return pairs
 
 
-def calc_probs(pairs: List[Tuple[str, str]]) -> pd.DataFrame:
+def calc_probs(pairs: List[Tuple[str, str]], all_states: List[str]) -> pd.DataFrame:
     """Calculate P(U) and P(D) for each state"""
     counts = defaultdict(lambda: defaultdict(int))
     totals = defaultdict(int)
@@ -97,17 +119,17 @@ def calc_probs(pairs: List[Tuple[str, str]]) -> pd.DataFrame:
         totals[state] += 1
     
     rows = []
-    for state in ALL_STATES:
+    for state in all_states:
         n = totals.get(state, 0)
         pu = counts[state]["U"] / n if n else 0.0
-        pdown = counts[state]["D"] / n if n else 0.0  # Changed from 'pd' to 'pdown'
+        pdown = counts[state]["D"] / n if n else 0.0
         rows.append({"state": state, "n": n, "P(U)": pu, "P(D)": pdown})
     
     return pd.DataFrame(rows).set_index("state")
 
 
-def last_state(highs: pd.Series) -> Optional[str]:
-    """Get last 3 moves"""
+def last_state(highs: pd.Series, order: int) -> Optional[str]:
+    """Get last N moves"""
     diff = highs.diff()
     moves = []
     
@@ -120,14 +142,22 @@ def last_state(highs: pd.Series) -> Optional[str]:
         elif d < 0:
             moves.append("D")
     
-    if len(moves) < 3:
+    if len(moves) < order:
         return None
     
-    return "".join(moves[-3:])
+    return "".join(moves[-order:])
 
 
 def main():
-    ap = argparse.ArgumentParser(description="Simple Markov model - uses ALL available data")
+    ap = argparse.ArgumentParser(
+        description="Markov model showing BOTH 3-candle and 5-candle predictions for confirmation",
+        formatter_class=argparse.RawDescriptionHelpFormatter,
+        epilog="""
+Why show both?
+  If both order=3 and order=5 agree → STRONG SIGNAL (high confidence)
+  If they disagree → WEAK SIGNAL (market uncertain)
+        """
+    )
     ap.add_argument("ticker", nargs="?", help="Stock ticker")
     args = ap.parse_args()
     
@@ -143,9 +173,10 @@ def main():
     
     print(f"Data range: {first_date} to {last_date} ({years:.1f} years, {len(df)} trading days)")
     
-    # Debug: Show last 4 candles
+    # Debug: Show last 6 candles (enough for order=5)
+    n_show = min(6, len(df))
     print("\n" + "="*70)
-    print("DEBUG: Last 4 candles")
+    print(f"DEBUG: Last {n_show} candles")
     print("="*70)
     
     try:
@@ -165,78 +196,152 @@ def main():
     print(f"  US Eastern time: {now_eastern.strftime('%Y-%m-%d %H:%M:%S %Z')}")
     print(f"  Data cutoff: {yesterday_eastern} (yesterday US Eastern)")
     
-    if len(df) >= 4:
-        last_4 = df.tail(4)
+    if len(df) >= n_show:
+        last_n = df.tail(n_show)
         actual_last = df.index[-1].date() if hasattr(df.index[-1], 'date') else df.index[-1]
         print(f"  Actual last date in data: {actual_last}")
         
-        print("\nStock data (last 4 candles):")
-        for idx, row in last_4.iterrows():
+        print(f"\nStock data (last {n_show} candles):")
+        for idx, row in last_n.iterrows():
             date_str = idx.strftime('%Y-%m-%d') if hasattr(idx, 'strftime') else str(idx)
             h = row.get('High', 'N/A')
             l = row.get('Low', 'N/A')
             o = row.get('Open', 'N/A')
             c = row.get('Close', 'N/A')
-            print(f"  {date_str}: H={h}, L={l}, O={o}, C={c}")
+            print(f"  {date_str}: H={h:.2f}, L={l:.2f}, O={o:.2f}, C={c:.2f}")
         
         print("\nHIGH price moves:")
-        highs = last_4['High'].values
+        highs = last_n['High'].values
         for i in range(1, len(highs)):
             move = 'U' if highs[i] > highs[i-1] else ('D' if highs[i] < highs[i-1] else '=')
-            print(f"  {highs[i-1]:.2f} → {highs[i]:.2f} = {move}")
-        
-        if len(highs) >= 3:
-            moves = []
-            for i in range(len(highs)-3, len(highs)):
-                if i > 0 and highs[i] != highs[i-1]:
-                    moves.append('U' if highs[i] > highs[i-1] else 'D')
-            pattern = ''.join(moves) if len(moves) == 3 else "N/A"
-            print(f"\nExpected last state: {pattern}")
+            pct = ((highs[i] / highs[i-1]) - 1) * 100
+            print(f"  {highs[i-1]:.2f} → {highs[i]:.2f} ({pct:+.2f}%) = {move}")
     
     print("="*70 + "\n")
     
-    # Build model
+    # Get HIGH prices
     highs = df['High'].astype(float).dropna()
-    pairs = build_pairs(highs)
     
-    if len(pairs) < 10:
-        print(f"[warn] Only {len(pairs)} transitions. Need more data!")
-        return 1
+    # Calculate for BOTH order=3 and order=5
+    results = {}
     
-    probs = calc_probs(pairs).sort_values(by="n", ascending=False)
-    curr_state = last_state(highs)
+    for order in [3, 5]:
+        all_states = generate_all_states(order)
+        pairs = build_pairs(highs, order)
+        
+        if len(pairs) < 10:
+            print(f"[warn] Order={order}: Only {len(pairs)} transitions. Skipping.")
+            continue
+        
+        probs = calc_probs(pairs, all_states)
+        curr_state = last_state(highs, order)
+        
+        results[order] = {
+            'probs': probs,
+            'state': curr_state,
+            'pairs': len(pairs)
+        }
     
-    # Output
-    first_date = df.index[0].date() if hasattr(df.index[0], 'date') else df.index[0]
-    last_date = df.index[-1].date() if hasattr(df.index[-1], 'date') else df.index[-1]
-    years = (last_date - first_date).days / 365.25
+    # Display results for both orders
+    print(f"{'='*70}")
+    print(f"FULL PROBABILITY TABLES")
+    print(f"{'='*70}\n")
     
-    print(f"[info] Ticker={ticker} | DataRange={first_date} to {last_date} ({years:.1f}y) | Transitions={len(pairs)} | LastState={curr_state}\n")
-    print("=== P(next move | last 3 moves) ===")
-    print("Note: Based on HIGH prices only\n")
+    predictions = {}
     
-    display = probs.copy()
-    display["P(U)"] = display["P(U)"].map(lambda x: f"{x:.4f}")
-    display["P(D)"] = display["P(D)"].map(lambda x: f"{x:.4f}")
-    print(display.to_string())
-    
-    if curr_state and curr_state in probs.index:
-        print(f"\n{'='*70}")
-        print(f"CURRENT STATE: {curr_state}")
+    for order in [3, 5]:
+        if order not in results:
+            continue
+        
+        probs = results[order]['probs']
+        curr_state = results[order]['state']
+        n_pairs = results[order]['pairs']
+        
         print(f"{'='*70}")
-        row = probs.loc[curr_state]
-        print(f"P(Up next): {row['P(U)']:.2%}")
-        print(f"P(Down next): {row['P(D)']:.2%}")
-        print(f"Sample size: {int(row['n'])} times")
+        print(f"ORDER={order} (last {order} candles)")
+        print(f"{'='*70}")
+        print(f"Total states: {2**order} | States with data: {len(probs[probs['n'] > 0])} | Transitions: {n_pairs}")
+        print(f"Current state: {curr_state}\n")
+        
+        # Show full probability table (only states with data)
+        probs_with_data = probs[probs['n'] > 0].sort_values(by="n", ascending=False)
+        
+        display = probs_with_data.copy()
+        display["P(U)"] = display["P(U)"].map(lambda x: f"{x:.4f}")
+        display["P(D)"] = display["P(D)"].map(lambda x: f"{x:.4f}")
+        
+        print(display.to_string())
+        print()
+        
+        # Extract prediction for current state
+        if curr_state and curr_state in probs.index:
+            row = probs.loc[curr_state]
+            if row['n'] > 0:
+                print(f"CURRENT STATE DETAIL:")
+                print(f"  State: {curr_state}")
+                print(f"  P(Up next):   {row['P(U)']:.2%}")
+                print(f"  P(Down next): {row['P(D)']:.2%}")
+                print(f"  Sample size:  {int(row['n'])} times")
+                
+                # Determine prediction
+                if row['P(U)'] >= 0.55:
+                    prediction = "UP"
+                    confidence = row['P(U)']
+                elif row['P(D)'] >= 0.55:
+                    prediction = "DOWN"
+                    confidence = row['P(D)']
+                else:
+                    prediction = "NEUTRAL"
+                    confidence = max(row['P(U)'], row['P(D)'])
+                
+                predictions[order] = {
+                    'direction': prediction,
+                    'confidence': confidence,
+                    'sample': int(row['n'])
+                }
+                
+                print(f"  → Prediction: {prediction} ({confidence:.1%})")
+            else:
+                print(f"\nCURRENT STATE: {curr_state}")
+                print("No historical data for this state")
+                predictions[order] = {'direction': 'NO DATA', 'confidence': 0, 'sample': 0}
+        else:
+            print(f"\nCURRENT STATE: Cannot determine")
+            predictions[order] = {'direction': 'NO DATA', 'confidence': 0, 'sample': 0}
+        
+        print("\n")
+    
+    # FINAL VERDICT - Check if both agree
+    print(f"{'='*70}")
+    print(f"FINAL TRADING SIGNAL")
+    print(f"{'='*70}\n")
+    
+    if 3 in predictions and 5 in predictions:
+        pred3 = predictions[3]
+        pred5 = predictions[5]
+        
+        print(f"Order=3: {pred3['direction']} ({pred3['confidence']:.1%}, n={pred3['sample']})")
+        print(f"Order=5: {pred5['direction']} ({pred5['confidence']:.1%}, n={pred5['sample']})")
+        print()
+        
+        # Check agreement
+        if pred3['direction'] == pred5['direction'] and pred3['direction'] != 'NEUTRAL':
+            avg_confidence = (pred3['confidence'] + pred5['confidence']) / 2
+            print(f"✓✓✓ STRONG {pred3['direction']} SIGNAL ✓✓✓")
+            print(f"Both models AGREE → High confidence!")
+            print(f"Average confidence: {avg_confidence:.1%}")
+        elif pred3['direction'] == 'NEUTRAL' or pred5['direction'] == 'NEUTRAL':
+            print(f"⚠ WEAK SIGNAL - At least one model shows NEUTRAL")
+            print(f"Recommendation: Avoid trading or use small position")
+        else:
+            print(f"✗ CONFLICTING SIGNALS ✗")
+            print(f"Order=3 says {pred3['direction']}, Order=5 says {pred5['direction']}")
+            print(f"Recommendation: DO NOT TRADE - Market direction unclear")
+    else:
+        print("Insufficient data for comparison")
     
     return 0
 
 
 if __name__ == "__main__":
     raise SystemExit(main())
-    """
-    Please dont get deceived...
-    if P(U) is higher probability, it might means the next price is lower, 
-    because we predict the moves, instead of actual
-    so if the expected is P(U) it means it requires next price is lower to align that High[t-1] > High[t], right?
-    """
