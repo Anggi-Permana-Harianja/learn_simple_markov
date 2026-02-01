@@ -41,8 +41,29 @@ array.clear(sells)
 for i = 0 to plook
     array.push(highs, high[i])
     array.push(lows,  low[i])
-    array.push(buys,  close[i] > open[i] ? volume[i] : 0.0)
-    array.push(sells, open[i] > close[i] ? volume[i] : 0.0)
+    // Improved buy/sell classification: consider both body and wicks
+    isBullish = close[i] > open[i]
+    isBearish = open[i] > close[i]
+    isDoji = close[i] == open[i]
+    
+    if isDoji
+        // Doji: split volume 50/50
+        array.push(buys,  volume[i] * 0.5)
+        array.push(sells, volume[i] * 0.5)
+    else if isBullish
+        // Bullish candle: assign based on body vs wick ratio
+        bodySize = close[i] - open[i]
+        totalRange = high[i] - low[i]
+        bodyRatio = totalRange > 0 ? bodySize / totalRange : 1.0
+        array.push(buys,  volume[i] * math.max(bodyRatio, 0.6))
+        array.push(sells, volume[i] * (1 - math.max(bodyRatio, 0.6)))
+    else
+        // Bearish candle
+        bodySize = open[i] - close[i]
+        totalRange = high[i] - low[i]
+        bodyRatio = totalRange > 0 ? bodySize / totalRange : 1.0
+        array.push(sells, volume[i] * math.max(bodyRatio, 0.6))
+        array.push(buys,  volume[i] * (1 - math.max(bodyRatio, 0.6)))
 
 // === Cleanup drawn boxes ===
 while array.size(boxes) > 0
@@ -57,7 +78,7 @@ step = rng != 0.0 ? (rng / res) : syminfo.mintick
 
 size = array.size(highs)
 
-// === Bin BUY volumes ===
+// === Bin BUY volumes (PROPORTIONAL DISTRIBUTION) ===
 array.clear(topB)
 array.clear(botB)
 array.clear(binBuy)
@@ -72,12 +93,21 @@ for i = 0 to res - 1
     for j = 0 to size - 1
         lo = array.get(lows, j)
         hi = array.get(highs, j)
-        inBin = not (lo > top or hi < bottom)
-        sumBuy += inBin ? array.get(buys, j) : 0.0
+        
+        // Calculate overlap between candle range and bin
+        overlapBottom = math.max(lo, bottom)
+        overlapTop = math.min(hi, top)
+        overlap = math.max(0, overlapTop - overlapBottom)
+        
+        if overlap > 0
+            candleRange = hi - lo
+            // Distribute volume proportionally based on overlap
+            proportion = candleRange > 0 ? overlap / candleRange : 0.0
+            sumBuy += array.get(buys, j) * proportion
 
     array.push(binBuy, sumBuy)
 
-// === Bin SELL volumes ===
+// === Bin SELL volumes (PROPORTIONAL DISTRIBUTION) ===
 array.clear(topS)
 array.clear(botS)
 array.clear(binSell)
@@ -92,8 +122,17 @@ for i = 0 to res - 1
     for j = 0 to size - 1
         lo = array.get(lows, j)
         hi = array.get(highs, j)
-        inBin = not (lo > top or hi < bottom)
-        sumSell += inBin ? array.get(sells, j) : 0.0
+        
+        // Calculate overlap between candle range and bin
+        overlapBottom = math.max(lo, bottom)
+        overlapTop = math.min(hi, top)
+        overlap = math.max(0, overlapTop - overlapBottom)
+        
+        if overlap > 0
+            candleRange = hi - lo
+            // Distribute volume proportionally based on overlap
+            proportion = candleRange > 0 ? overlap / candleRange : 0.0
+            sumSell += array.get(sells, j) * proportion
 
     array.push(binSell, sumSell)
 
