@@ -2,11 +2,11 @@
 indicator("AMT Orderflow Profile + Imbalance Highlight + Dashboard", overlay = true, max_boxes_count = 500)
 
 // === Inputs ===
-ptype = input.string("Comparison", "Profile Type", ["Comparison", "Net Order Flow"])
-plook = input.int(10, "Profile Lookback")
-res   = input.int(20, "Profile Resolution")
-scale = input.int(10, "Profile Horizontal Scale")
-off   = input.int(6,  "Profile Horizontal Offset")
+ptype = input.string("Comparison", "Profile Type", options = ["Comparison", "Net Order Flow"])
+plook = input.int(10, "Profile Lookback", minval = 1)
+res   = input.int(20, "Profile Resolution", minval = 2, maxval = 200)
+scale = input.int(10, "Profile Horizontal Scale", minval = 1)
+off   = input.int(6,  "Profile Horizontal Offset", minval = 0)
 
 h  = input.bool(true, "Show Profile", group="Appearance")
 
@@ -17,71 +17,89 @@ red   = input.color(#ff1100, "Sell Color", group="Appearance")
 binImbalanceThreshold = input.float(0.75, "Bin Imbalance Threshold", minval = 0.6, maxval = 0.95)
 
 // === Arrays ===
-var boxes = array.new_box()
+var box[]   boxes   = array.new_box()
 
-topB  = array.new_float(res)
-botB  = array.new_float(res)
-topS  = array.new_float(res)
-botS  = array.new_float(res)
+var float[] topB    = array.new_float()
+var float[] botB    = array.new_float()
+var float[] topS    = array.new_float()
+var float[] botS    = array.new_float()
 
-binBuy  = array.new_float(res)
-binSell = array.new_float(res)
+var float[] binBuy  = array.new_float()
+var float[] binSell = array.new_float()
 
-highs = array.new_float()
-lows  = array.new_float()
-buys  = array.new_float()
-sells = array.new_float()
+var float[] highs   = array.new_float()
+var float[] lows    = array.new_float()
+var float[] buys    = array.new_float()
+var float[] sells   = array.new_float()
 
 // === Collect lookback ===
-highs.clear(), lows.clear(), buys.clear(), sells.clear()
+array.clear(highs)
+array.clear(lows)
+array.clear(buys)
+array.clear(sells)
+
 for i = 0 to plook
-    highs.push(high[i])
-    lows.push(low[i])
-    buys.push(close[i] > open[i] ? volume[i] : 0)
-    sells.push(open[i] > close[i] ? volume[i] : 0)
+    array.push(highs, high[i])
+    array.push(lows,  low[i])
+    array.push(buys,  close[i] > open[i] ? volume[i] : 0.0)
+    array.push(sells, open[i] > close[i] ? volume[i] : 0.0)
 
-// === Cleanup ===
-while boxes.size() > 0
-    boxes.shift().delete()
+// === Cleanup drawn boxes ===
+while array.size(boxes) > 0
+    b = array.shift(boxes)
+    box.delete(b)
 
+// === Range + step (guard flat range) ===
 maxx = array.max(highs)
 minn = array.min(lows)
-step = (maxx - minn) / res
+rng  = maxx - minn
+step = rng != 0.0 ? (rng / res) : syminfo.mintick
+
 size = array.size(highs)
 
 // === Bin BUY volumes ===
-topB.clear(), botB.clear(), binBuy.clear()
+array.clear(topB)
+array.clear(botB)
+array.clear(binBuy)
+
 for i = 0 to res - 1
     bottom = minn + i * step
     top    = minn + (i + 1) * step
-    botB.push(bottom)
-    topB.push(top)
+    array.push(botB, bottom)
+    array.push(topB, top)
 
-    sumBuy = 0.0
+    float sumBuy = 0.0
     for j = 0 to size - 1
-        inBin = not (lows.get(j) > top or highs.get(j) < bottom)
-        sumBuy += inBin ? buys.get(j) : 0
+        lo = array.get(lows, j)
+        hi = array.get(highs, j)
+        inBin = not (lo > top or hi < bottom)
+        sumBuy += inBin ? array.get(buys, j) : 0.0
 
-    binBuy.push(sumBuy)
+    array.push(binBuy, sumBuy)
 
 // === Bin SELL volumes ===
-topS.clear(), botS.clear(), binSell.clear()
+array.clear(topS)
+array.clear(botS)
+array.clear(binSell)
+
 for i = 0 to res - 1
     bottom = minn + i * step
     top    = minn + (i + 1) * step
-    botS.push(bottom)
-    topS.push(top)
+    array.push(botS, bottom)
+    array.push(topS, top)
 
-    sumSell = 0.0
+    float sumSell = 0.0
     for j = 0 to size - 1
-        inBin = not (lows.get(j) > top or highs.get(j) < bottom)
-        sumSell += inBin ? sells.get(j) : 0
+        lo = array.get(lows, j)
+        hi = array.get(highs, j)
+        inBin = not (lo > top or hi < bottom)
+        sumSell += inBin ? array.get(sells, j) : 0.0
 
-    binSell.push(sumSell)
+    array.push(binSell, sumSell)
 
 // === Draw Profile + Track Text Presence ===
-int buyStreak  = 0
-int sellStreak = 0
+int  buyStreak  = 0
+int  sellStreak = 0
 bool buyTextPresent  = false
 bool sellTextPresent = false
 
@@ -89,9 +107,10 @@ maxBuy  = array.max(binBuy)
 maxSell = array.max(binSell)
 
 for i = 0 to res - 1
-    buyVol  = binBuy.get(i)
-    sellVol = binSell.get(i)
-    total   = buyVol + sellVol
+    buyVol  = array.get(binBuy, i)
+    sellVol = array.get(binSell, i)
+
+    total = buyVol + sellVol
 
     buyImb  = total > 0 and buyVol  / total >= binImbalanceThreshold
     sellImb = total > 0 and sellVol / total >= binImbalanceThreshold
@@ -104,24 +123,24 @@ for i = 0 to res - 1
     if sellStreak >= 3
         sellTextPresent := true
 
-    buyTxt  = buyImb  ? "BUY IMB\n"  + str.tostring(buyVol,  format.volume)
-                      : str.tostring(buyVol, format.volume)
+    buyTxt  = buyImb  ? "BUY IMB\n"  + str.tostring(buyVol,  format.volume) : str.tostring(buyVol,  format.volume)
+    sellTxt = sellImb ? "SELL IMB\n" + str.tostring(sellVol, format.volume) : str.tostring(sellVol, format.volume)
 
-    sellTxt = sellImb ? "SELL IMB\n" + str.tostring(sellVol, format.volume)
-                      : str.tostring(sellVol, format.volume)
+    buyWidth  = maxBuy  > 0 ? (buyVol  / maxBuy)  * scale : 0.0
+    sellWidth = maxSell > 0 ? (sellVol / maxSell) * scale : 0.0
 
-    buyWidth = maxBuy > 0 ? (buyVol / maxBuy) * scale : 0
     buyRight = bar_index + off + scale
     buyLeft  = buyRight - buyWidth
 
-    sellWidth = maxSell > 0 ? (sellVol / maxSell) * scale : 0
     sellLeft  = bar_index + off + scale
     sellRight = sellLeft + sellWidth
 
     if h
-        boxes.push(box.new(int(buyLeft),  topB.get(i), int(buyRight), botB.get(i), border_width = buyImb ? 2 : 1, border_color = buyImb ? color.new(green,0) : color.new(green,50),  bgcolor      = buyImb ? color.new(green,75) : color.new(green,90), text         = buyTxt,  text_color   = chart.fg_color))
+        bBuy = box.new(int(buyLeft), array.get(topB, i), int(buyRight), array.get(botB, i), border_width = buyImb ? 2 : 1, border_color = buyImb ? color.new(green, 0) : color.new(green, 50), bgcolor = buyImb ? color.new(green, 75) : color.new(green, 90), text = buyTxt, text_color = chart.fg_color)
+        array.push(boxes, bBuy)
 
-        boxes.push(box.new(int(sellLeft), topS.get(i), int(sellRight), botS.get(i), border_width = sellImb ? 2 : 1, border_color = sellImb ? color.new(red,0) : color.new(red,50), bgcolor      = sellImb ? color.new(red,75) : color.new(red,90), text         = sellTxt, text_color   = chart.fg_color))
+        bSell = box.new(int(sellLeft), array.get(topS, i), int(sellRight), array.get(botS, i), border_width = sellImb ? 2 : 1, border_color = sellImb ? color.new(red, 0) : color.new(red, 50), bgcolor = sellImb ? color.new(red, 75) : color.new(red, 90), text = sellTxt, text_color = chart.fg_color)
+        array.push(boxes, bSell)
 
 // === Fresh Print Alert Logic ===
 var bool prevBuyTextPresent  = false
@@ -134,5 +153,5 @@ prevBuyTextPresent  := buyTextPresent
 prevSellTextPresent := sellTextPresent
 
 // === Alert Conditions ===
-alertcondition(newBuyAlert,  "BUY IMB (3+ boxes, fresh)",  "Fresh BUY imbalance printed across at least 2 boxes")
-alertcondition(newSellAlert, "SELL IMB (3+ boxes, fresh)", "Fresh SELL imbalance printed across at least 2 boxes")
+alertcondition(newBuyAlert,  "BUY IMB (3+ bins, fresh)",  "Fresh BUY imbalance printed across at least 3 bins")
+alertcondition(newSellAlert, "SELL IMB (3+ bins, fresh)", "Fresh SELL imbalance printed across at least 3 bins")
