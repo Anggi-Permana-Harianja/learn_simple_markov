@@ -1627,3 +1627,207 @@ Trade responsibly. Manage risk. Preserve capital.
 *System: Order Flow + Support/Resistance + Volume Profile*
 
 **Questions? Review this guide thoroughly. Practice paper trading. Follow the rules. Trust the process.**
+
+---
+
+# VWAP Dominance Playbook
+*A mechanical guide for bias + execution using VWAP dominance (15m RTH)*
+
+---
+
+## 1. What this indicator does (and does NOT do)
+
+### What it does
+- Measures **who controlled value yesterday**
+- Produces a **directional bias** for today (Bullish / Bearish / No Edge)
+- Filters **which side you are allowed to trade**
+
+### What it does NOT do
+- It does NOT predict price
+- It does NOT give entries
+- It does NOT force a trade every day
+
+> **Bias ≠ Entry**
+
+---
+
+## 2. Fixed definitions (do NOT change these)
+
+### Timeframe
+- **15-minute chart**
+
+### Session
+- **US Regular Trading Hours (RTH)**
+  - New York: **09:30 – 16:00**
+  - Germany (CET/CEST): **15:30 – 22:00**
+
+### Candles per session
+- RTH length = **6.5 hours**
+- 6.5 × 4 = **26 candles max**
+- Actual printed candles may be fewer (illiquid days)
+
+---
+
+## 3. VWAP definitions (critical)
+
+### Yesterday’s VWAP
+- **The FINAL VWAP value at yesterday’s RTH close (using 15-min timeframe)**
+- One fixed number
+- Used for **bias & context**
+- Treated as a **horizontal level today**
+
+### Today’s VWAP
+- A **new VWAP**, resets at today’s RTH open
+- Moves intraday
+- Used for **entries & execution**
+
+> **Bias comes from yesterday’s VWAP  
+Execution comes from today’s VWAP**
+
+---
+
+## 4. VWAP Dominance calculation (yesterday only)
+
+For each **15-minute RTH candle yesterday**, ask ONE question:
+
+> **Did the candle CLOSE above or below VWAP?**
+
+Rules:
+- Wick does NOT matter
+- Candle color does NOT matter
+- Touching VWAP ≠ above
+
+### Count
+- `above` = number of closes above VWAP
+- `below` = number of closes below VWAP
+- `total = above + below`
+
+---
+
+## 5. Dominance thresholds (15m)
+
+### Bullish VWAP Dominance
+- **≥ 17 candles ABOVE VWAP**
+
+### Bearish VWAP Dominance
+- **≥ 17 candles BELOW VWAP**
+
+### No Edge
+- Anything else (overlap / balance)
+
+> If there is **no dominance**, you do **nothing today**.
+
+---
+
+## 6. How to interpret yesterday → today
+
+### If yesterday was BULLISH (≥17 above VWAP)
+- You are **allowed to look for longs**
+- Shorts are **forbidden**
+
+### If yesterday was BEARISH (≥17 below VWAP)
+- You are **allowed to look for shorts**
+- Longs are **forbidden**
+
+### If NO EDGE
+- No directional trades
+- Skip the day
+
+---
+
+## 7. What to check at today’s open (15:30 CET)
+
+### Bullish bias
+- Price opens **above yesterday’s VWAP**
+  - Bias is **active**
+- Price opens **below yesterday’s VWAP**
+  - Bias is **on hold** (not invalid yet)
+
+### Bearish bias
+- Price opens **below yesterday’s VWAP**
+  - Bias is **active**
+- Price opens **above yesterday’s VWAP**
+  - Bias is **on hold**
+
+Opening location = **context**, not entry.
+
+---
+
+## 8. Early-session confirmation (first 30–60 min)
+
+You wait for **acceptance**, not a fixed clock.
+
+### Bullish confirmation
+- Price holds above VWAP
+- Pullbacks respect VWAP as **support**
+- VWAP slope flat to rising
+- No sustained closes below VWAP
+
+### Bearish confirmation
+- Price holds below VWAP
+- Rallies reject VWAP as **resistance**
+- VWAP slope flat to falling
+- No sustained closes above VWAP
+
+If confirmation fails → **no trade**.
+
+---
+
+## 9. Entry principle (simple)
+
+### Bullish day
+- Buy **pullbacks to today’s VWAP**
+- Never chase highs
+
+### Bearish day
+- Sell **rallies into today’s VWAP**
+- Never short lows
+
+VWAP = execution anchor.
+
+---
+
+## 10. Invalidation rules (non-negotiable)
+
+### Bullish bias invalidated if:
+- Multiple 15m closes **below today’s VWAP**
+- VWAP flips to resistance
+- Value acceptance shifts below
+
+### Bearish bias invalidated if:
+- Multiple 15m closes **above today’s VWAP**
+- VWAP flips to support
+- Value acceptance shifts above
+
+Invalidation = **stand down**.
+
+---
+
+## 11. Common mistakes to avoid
+
+- Using calendar days instead of RTH
+- Counting “last 26 candles” instead of RTH candles
+- Judging candles by color or wicks
+- Using yesterday’s VWAP curve instead of final value
+- Forcing trades on NO EDGE days
+
+---
+
+## 12. One-page summary (memorize this)
+
+- Yesterday ≥17 ABOVE VWAP → **Bullish bias**
+- Yesterday ≥17 BELOW VWAP → **Bearish bias**
+- Open relative to **yesterday’s VWAP** → context
+- Today’s VWAP → execution
+- No dominance → no trade
+
+> **This system filters trades.  
+It does not create trades.**
+
+---
+
+## 13. Final rule
+
+> **If VWAP dominance is unclear, your risk is unclear.  
+And unclear risk = no trade.**
+
