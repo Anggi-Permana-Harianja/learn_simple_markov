@@ -1,0 +1,176 @@
+//@version=5
+indicator("Yesterday VWAP Dominance (Raw Count)", overlay=true)
+
+// On 15m RTH there are 26 bars. Dominance 65% ~= 17 bars.
+// Set this threshold as raw bars.
+barsThreshold = input.int(17, "Dominance Bars Threshold (15m RTH: 17 ≈ 65%)", minval=1, maxval=26)
+
+// ────────────────────────────────────────────────────────────────────────────
+// RTH (New York time)
+// ────────────────────────────────────────────────────────────────────────────
+h = hour(time, "America/New_York")
+m = minute(time, "America/New_York")
+hm = h * 100 + m
+inRTH = hm >= 930 and hm < 1600
+
+// Market status (simple)
+marketStatus = inRTH ? "LIVE" : "CLOSED"
+statusColor = inRTH ? color.green : color.red
+
+// New day (first RTH bar of the day)
+newDay = ta.change(dayofmonth(time, "America/New_York")) != 0 and inRTH
+
+// ────────────────────────────────────────────────────────────────────────────
+// VWAP (session-style, manual)
+// ────────────────────────────────────────────────────────────────────────────
+var float pv = 0.0
+var float v  = 0.0
+
+if newDay
+    pv := 0.0
+    v  := 0.0
+
+if inRTH
+    pv += hlc3 * volume
+    v  += volume
+
+vwap = v > 0 ? pv / v : na
+
+// ────────────────────────────────────────────────────────────────────────────
+// COUNT (RAW)
+// ────────────────────────────────────────────────────────────────────────────
+var int above = 0
+var int below = 0
+
+// "Yesterday" snapshot (RAW)
+var int yAbove = na
+var int yBelow = na
+var int yBars  = 0
+var int days   = 0
+
+// Save yesterday on new day (snapshot yesterday’s raw counts)
+if newDay
+    total = above + below
+    if total > 0
+        yAbove := above
+        yBelow := below
+        yBars  := total
+        days  += 1
+
+    above := 0
+    below := 0
+
+// Increment raw counts
+if inRTH and not na(vwap)
+    if close > vwap
+        above += 1
+    else if close < vwap
+        below += 1
+
+// Current totals (RAW)
+currentTotal = above + below
+
+// ────────────────────────────────────────────────────────────────────────────
+// BIAS SIGNALS (RAW)
+// ────────────────────────────────────────────────────────────────────────────
+
+// USE TODAY (based on yesterday)
+useTodayBias  = "WAITING"
+useTodayColor = color.gray
+
+if not na(yAbove) and yBars > 0
+    if yAbove >= barsThreshold
+        useTodayBias  := "BULLISH"
+        useTodayColor := color.new(color.green, 0)
+    else if yBelow >= barsThreshold
+        useTodayBias  := "BEARISH"
+        useTodayColor := color.new(color.red, 0)
+    else
+        useTodayBias  := "NO EDGE"
+        useTodayColor := color.new(color.orange, 0)
+
+// TOMORROW PREVIEW (based on today so far — RAW)
+tomorrowBias  = "DEVELOPING"
+tomorrowColor = color.gray
+
+// Require at least 10 samples before showing a call (you can change this)
+minBarsForPreview = input.int(10, "Min Bars For Preview", minval=1, maxval=26)
+
+if inRTH and currentTotal >= minBarsForPreview
+    if above >= barsThreshold
+        tomorrowBias  := "BULLISH"
+        tomorrowColor := color.new(color.green, 30)
+    else if below >= barsThreshold
+        tomorrowBias  := "BEARISH"
+        tomorrowColor := color.new(color.red, 30)
+    else
+        tomorrowBias  := "NO EDGE"
+        tomorrowColor := color.new(color.orange, 30)
+else if not inRTH
+    tomorrowBias  := "MARKET CLOSED"
+    tomorrowColor := color.gray
+
+// ────────────────────────────────────────────────────────────────────────────
+// TABLE
+// ────────────────────────────────────────────────────────────────────────────
+var table tb = table.new(position.top_right, 2, 13, bgcolor=color.new(color.black, 85), border_width=1)
+
+if barstate.islast
+    r = 0
+
+    table.cell(tb, 0, r, "VWAP DOMINANCE (RAW)", text_color=color.white, bgcolor=color.new(color.blue, 70))
+    table.cell(tb, 1, r, marketStatus, text_color=color.white, bgcolor=statusColor)
+    r += 1
+
+    table.cell(tb, 0, r, "Days Processed", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, r, str.tostring(days), text_color=days > 0 ? color.green : color.red, text_size=size.tiny)
+    r += 1
+
+    table.cell(tb, 0, r, "YESTERDAY", text_color=color.white, text_size=size.small, bgcolor=color.new(color.blue, 70))
+    table.cell(tb, 1, r, "", bgcolor=color.new(color.blue, 70))
+    r += 1
+
+    table.cell(tb, 0, r, "Above VWAP", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, r, not na(yAbove) ? (str.tostring(yAbove) + " bars") : "N/A", text_color=color.new(color.green, 30), text_size=size.tiny)
+    r += 1
+
+    table.cell(tb, 0, r, "Below VWAP", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, r, not na(yBelow) ? (str.tostring(yBelow) + " bars") : "N/A", text_color=color.new(color.red, 30), text_size=size.tiny)
+    r += 1
+
+    table.cell(tb, 0, r, "Sample", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, r, str.tostring(yBars) + " bars", text_color=color.white, text_size=size.tiny)
+    r += 1
+
+    table.cell(tb, 0, r, "USE TODAY", text_color=color.white, text_size=size.small, bgcolor=color.new(color.green, 80))
+    table.cell(tb, 1, r, useTodayBias, text_color=color.white, text_size=size.normal, bgcolor=useTodayColor)
+    r += 1
+
+    table.cell(tb, 0, r, "────────", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, r, "────────", text_color=color.gray, text_size=size.tiny)
+    r += 1
+
+    table.cell(tb, 0, r, "TODAY (LIVE)", text_color=color.white, text_size=size.small, bgcolor=color.new(color.purple, 80))
+    table.cell(tb, 1, r, "", bgcolor=color.new(color.purple, 80))
+    r += 1
+
+    table.cell(tb, 0, r, "Above", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, r, str.tostring(above) + " bars", text_color=color.white, text_size=size.tiny)
+    r += 1
+
+    table.cell(tb, 0, r, "Below", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, r, str.tostring(below) + " bars", text_color=color.white, text_size=size.tiny)
+    r += 1
+
+    table.cell(tb, 0, r, "Total", text_color=color.gray, text_size=size.tiny)
+    table.cell(tb, 1, r, str.tostring(currentTotal) + " bars", text_color=color.white, text_size=size.tiny)
+    r += 1
+
+    table.cell(tb, 0, r, "TOMORROW PREVIEW", text_color=color.white, text_size=size.small, bgcolor=color.new(color.orange, 80))
+    table.cell(tb, 1, r, tomorrowBias, text_color=color.white, text_size=size.normal, bgcolor=tomorrowColor)
+
+// ────────────────────────────────────────────────────────────────────────────
+// PLOTS
+// ────────────────────────────────────────────────────────────────────────────
+plot(inRTH ? vwap : na, "VWAP", color.yellow, 2)
+bgcolor(inRTH ? color.new(color.blue, 97) : na)
