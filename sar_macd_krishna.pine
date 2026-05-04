@@ -1,0 +1,59 @@
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © traderharikrishna
+
+//@version=5
+indicator("SARMACD")
+// This source code is subject to the terms of the Mozilla Public License 2.0 at https://mozilla.org/MPL/2.0/
+// © traderharikrishna
+
+stats=input.bool(true,'Status Table')
+
+[m,s,h]=ta.macd(close,12,26,9)
+sw=input.int(5,'sideways')
+sel=input.string('MACD',title = 'Graph Type',options=['MACD','HIST'])
+plot(0, title='Zero line', linewidth=1, color=color.new(color.gray, 0))
+
+sar=ta.sar(0.02,0.02,0.2)
+sa=ta.valuewhen(ta.cross(close,sar),close[0],0)
+dir = sar < close ? 1 : -1
+sarcol=dir == 1?color.rgb(2, 80, 90):color.rgb(255, 0, 128)
+
+bc=dir==1 and close>sa and m>0?color.rgb(1, 185, 7):dir==-1 and close<sa and m<0?color.rgb(224, 4, 4):color.yellow
+hc=dir==1 and close>sa and h>0?color.rgb(1, 185, 7):dir==-1 and close<sa and h<0?color.rgb(224, 4, 4):color.yellow
+
+
+plot(sel=='MACD'?m:h,color=sel=='MACD'?bc:hc,style = plot.style_columns,linewidth = 3)
+plot(sel=='HIST'?m:na,color=color.rgb(255, 255, 255),style = plot.style_line,linewidth = 2)
+plot(s,color=sarcol,style = sel=='MACD'?plot.style_circles:plot.style_line,linewidth = 2)
+
+barcolor(bc)
+
+if stats
+    status = table.new(position.top_right, 11, 20, border_width=1)
+    txtcol=color.white
+
+    mcol=m>0?color.green:color.red
+    hcol=h>0?color.green:color.red
+    macx=m>s?color.green:color.red
+    macxtime=ta.barssince(ta.cross(m,s))
+    candlecol=open<close?color.green:open>close?color.red:color.yellow
+
+    table.cell(status, 0, 1, text='Candle', bgcolor=na,text_color=txtcol, text_size=size.small,text_halign=text.align_left)
+    table.cell(status, 0, 2, text='MACD Trend', bgcolor=na,text_color=txtcol, text_size=size.small,text_halign=text.align_left)
+    table.cell(status, 0, 3, text='Hist is',  bgcolor=na,text_color=txtcol, text_size=size.small,text_halign=text.align_left)
+    table.cell(status, 0, 4, text='MA Crossed', bgcolor=na,text_color=txtcol, text_size=size.small,text_halign=text.align_left)
+    table.cell(status, 0, 5, text='PSAR direction', bgcolor=na,text_color=txtcol, text_size=size.small,text_halign=text.align_left)
+
+    table.cell(status, 1, 1, text='', bgcolor=candlecol,text_color=txtcol, text_size=size.small,text_halign=text.align_left)
+    table.cell(status, 1, 2, text=' ', bgcolor=mcol,text_color=txtcol, text_size=size.small,text_halign=text.align_left)
+    table.cell(status, 1, 3, text=' ',  bgcolor=hcol,text_color=txtcol, text_size=size.small,text_halign=text.align_left)
+    table.cell(status, 1, 4, text=str.tostring(macxtime), bgcolor=macx,text_color=txtcol, text_size=size.small,text_halign=text.align_left)
+    table.cell(status, 1, 5, text=' ', bgcolor=bc,text_color=txtcol, text_size=size.small,text_halign=text.align_left)
+plot(syminfo.mintick*sw,color = color.rgb(255, 255, 255),title = 'Sideways Up')
+plot(syminfo.mintick*-sw,color = color.rgb(255, 255, 255),title = 'Sideways Dn')
+
+buy=h>0 and dir==1 and dir[1]==-1
+sell=h<0 and dir==-1 and dir[1]==1
+alertcondition(buy,'MACD SAR Buy','MACD SAR Buy Signal')
+alertcondition(sell,'MACD SAR Sell','MACD SAR Sell Signal')
+alertcondition(buy or sell,'MACD SAR Buy/Sell','MACD SAR Buy/Sell Signal')
